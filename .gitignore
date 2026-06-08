@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+python/.venv/
+python/**/__pycache__/
+python/*.egg-info/
+python/.pytest_cache/
+*.pyc
+.DS_Store

@@ -1,0 +1,37 @@
+{
+  "name": "aaa-sentry-instrument",
+  "version": "1.0.0",
+  "description": "Reusable Sentry instrumentation for AAA web apps (Next.js + FastAPI)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "aaa-sentry-instrument": "./bin/init.mjs"
+  },
+  "scripts": {
+    "prepare": "tsc",
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "src/"
+  ],
+  "peerDependencies": {
+    "@sentry/nextjs": ">=10"
+  },
+  "devDependencies": {
+    "@sentry/nextjs": "^10.56.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0"
+  },
+  "license": "MIT"
+}
