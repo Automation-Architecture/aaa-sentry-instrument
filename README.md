@@ -18,7 +18,7 @@ use byte-identical regex patterns.
 ### Install
 
 ```sh
-npm install "git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git#v0.1.0"
+npm install "git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git#v0.1.1"
 ```
 
 The package builds during install via `prepare: tsc`. Peer dependency:
@@ -40,7 +40,7 @@ The package builds during install via `prepare: tsc`. Peer dependency:
 >   - aaa-sentry-instrument
 > ```
 
-> **Versioning:** pin to a tag (e.g. `#v0.1.0`). To upgrade, publish a new tag and
+> **Versioning:** pin to a tag (e.g. `#v0.1.1`). To upgrade, publish a new tag and
 > bump the `#<tag>` reference in `package.json`.
 
 ### Scaffold (recommended)
@@ -140,12 +140,12 @@ export { withAaaSentry }
 ### Install
 
 ```sh
-pip install "aaa-sentry-instrument @ git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git@v0.1.0#subdirectory=python"
+pip install "aaa-sentry-instrument @ git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git@v0.1.1#subdirectory=python"
 ```
 
 > **Repo is public — no auth token needed in CI.**
 >
-> **Versioning:** pin to a tag (e.g. `@v0.1.0`). To upgrade, publish a new tag and
+> **Versioning:** pin to a tag (e.g. `@v0.1.1`). To upgrade, publish a new tag and
 > bump the `@<tag>` reference in your `requirements.txt` / `pyproject.toml`.
 
 ### Usage
