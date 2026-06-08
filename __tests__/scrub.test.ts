@@ -112,12 +112,20 @@ describe("scrubAny", () => {
     expect(result.level1.level2.safe).toBe("keep");
   });
 
-  it("handles circular references without throwing (object identity re-use)", () => {
-    // scrubAny walks via Object.keys — it does NOT guard cycles itself, but
-    // the real-world protection is that Sentry does not produce circular event
-    // payloads. Verify it at least doesn't throw on the common safe patterns.
+  it("handles true circular references without throwing or infinite-looping", () => {
+    // scrubAny uses a WeakSet visited guard — a real cycle must not stack-overflow.
     const obj: Record<string, unknown> = { email: SAMPLE_EMAIL };
+    obj.self = obj; // genuine cycle
     expect(() => scrubAny(obj)).not.toThrow();
+    // The email in the top-level string field should still be scrubbed.
+    const result = scrubAny({ email: SAMPLE_EMAIL }) as Record<string, string>;
+    expect(result.email).toBe("[EMAIL]");
+  });
+
+  it("handles circular references inside arrays", () => {
+    const arr: unknown[] = [SAMPLE_EMAIL];
+    arr.push(arr); // array that contains itself
+    expect(() => scrubAny(arr)).not.toThrow();
   });
 });
 

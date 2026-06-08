@@ -15,27 +15,18 @@
 import { existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 
-// ── detect app layout (app/ or src/) ──────────────────────────────────────
+// ── detect app layout (src/ vs root) ──────────────────────────────────────
 
 const cwd = process.cwd();
 const hasSrc = existsSync(join(cwd, "src"));
-const hasApp = existsSync(join(cwd, "app"));
 
-// Next.js 15 convention: instrumentation files live alongside pages,
-// i.e. in src/ if that layout is used, otherwise at root.
-let srcDir;
-if (hasSrc) {
-  srcDir = join(cwd, "src");
-} else if (hasApp) {
-  // app/ directory layout without a separate src/ — put files in app/
-  srcDir = join(cwd, "app");
-} else {
-  // Fallback: root (will be placed at the project root)
-  srcDir = cwd;
-}
+// Next.js loads instrumentation.ts / instrumentation-client.ts /
+// sentry.*.config.ts from the project root **or** from src/ — never
+// from inside app/. Use src/ when it exists; otherwise fall back to root.
+const srcDir = hasSrc ? join(cwd, "src") : cwd;
 
 console.log(`\naaa-sentry-instrument init`);
-console.log(`Detected layout: ${srcDir}\n`);
+console.log(`Detected layout: files will be written to ${srcDir}\n`);
 
 // ── file definitions ───────────────────────────────────────────────────────
 

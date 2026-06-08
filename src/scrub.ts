@@ -56,18 +56,28 @@ export function scrubString(value: string): string {
  * Strings are scrubbed in place; arrays, plain-objects, and Record-like
  * containers are walked and their string members are scrubbed.  All other
  * types are returned unchanged.
+ *
+ * A `WeakSet` visitor guard prevents infinite recursion on circular object
+ * graphs — any object already on the current walk stack is returned
+ * unmodified.
  */
-export function scrubAny(value: unknown): unknown {
+export function scrubAny(value: unknown, _visited?: WeakSet<object>): unknown {
   if (typeof value === "string") {
     return scrubString(value);
   }
   if (Array.isArray(value)) {
-    return value.map(scrubAny);
+    const visited = _visited ?? new WeakSet<object>();
+    if (visited.has(value)) return value;
+    visited.add(value);
+    return value.map((item) => scrubAny(item, visited));
   }
   if (value !== null && typeof value === "object") {
+    const visited = _visited ?? new WeakSet<object>();
+    if (visited.has(value)) return value;
+    visited.add(value);
     const obj = value as Record<string, unknown>;
     for (const key of Object.keys(obj)) {
-      obj[key] = scrubAny(obj[key]);
+      obj[key] = scrubAny(obj[key], visited);
     }
     return obj;
   }

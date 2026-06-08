@@ -58,16 +58,33 @@ def _scrub_string(value: str) -> str:
     return value
 
 
-def _scrub_any(value: Any) -> Any:
-    """Recursively walk ``value`` and scrub any string member."""
+def _scrub_any(value: Any, _visited: set[int] | None = None) -> Any:
+    """Recursively walk ``value`` and scrub any string member.
+
+    An ``id()``-based visited set guards against infinite recursion on
+    circular object graphs — any container already on the walk stack is
+    returned unmodified.
+    """
     if isinstance(value, str):
         return _scrub_string(value)
-    if isinstance(value, list):
-        return [_scrub_any(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_scrub_any(item) for item in value)
-    if isinstance(value, dict):
-        return {key: _scrub_any(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, dict)):
+        visited = _visited if _visited is not None else set()
+        oid = id(value)
+        if oid in visited:
+            return value  # cycle detected — stop recursion
+        visited.add(oid)
+        if isinstance(value, list):
+            result_list = [_scrub_any(item, visited) for item in value]
+            visited.discard(oid)
+            return result_list
+        if isinstance(value, tuple):
+            result_tuple = tuple(_scrub_any(item, visited) for item in value)
+            visited.discard(oid)
+            return result_tuple
+        # dict
+        result_dict = {key: _scrub_any(val, visited) for key, val in value.items()}
+        visited.discard(oid)
+        return result_dict
     return value
 
 
