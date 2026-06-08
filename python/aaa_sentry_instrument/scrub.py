@@ -1,21 +1,45 @@
 """
-Sentry ``before_send`` scrubber for AAA FastAPI backends.
+Sentry ``before_send`` secret/PII scrubber for AAA FastAPI backends.
 
-Lifted verbatim from ``Automation-Architecture/aaa-client-dashboard``
-``backend/sentry_scrubber.py`` — this file IS the canonical source for
-the package. If you need to change scrubbing logic, change it here and
-keep the JS twin (``src/scrub.ts``) in sync.
+This file IS the canonical source for the package. If you need to change
+scrubbing logic, change it here and keep the JS twin (``src/scrub.ts``) in
+sync.
 
-Strips PII from every Sentry event payload before it leaves the process.
-Two categories of sensitive data flow through AAA services:
+⚠️  SYNC REQUIREMENT: The regex source strings and secret-key list in this
+file must stay byte-identical to the JS twin (``src/scrub.ts``).  A comment
+in that file mirrors this requirement.  Whenever you add or remove a key,
+update BOTH files in the same commit.
 
-1. **Email addresses** — submitted via contact-form / API payloads.
-   Pattern: standard ``user@host.tld`` form; scrubbed to ``[EMAIL]``.
+Strips PII and secrets from every Sentry event payload before it leaves the
+process.  Four categories of sensitive data are scrubbed:
 
-2. **comment_token** — UUID v4 stored in ``project_client_comments`` and
-   used as an edit/delete bearer credential on comment endpoints.
-   Pattern: ``xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx``; scrubbed to
-   ``[COMMENT_TOKEN]``.
+1. **Bearer tokens** — ``Authorization: Bearer <token>`` / bare ``Bearer <x>``
+   anywhere in a string; scrubbed to ``Bearer [REDACTED]``.
+   Applied FIRST so the full token is removed before the key-name rule can
+   partially match ``authorization``.
+
+2. **Secret/credential parameters by key name** — wherever a ``key=value``,
+   ``"key":"value"``, or ``key: value`` pattern appears (query strings, URLs,
+   JSON-ish text, log lines).  Redacts the VALUE, keeps the key.  Covered
+   keys (case-insensitive, matched with ``\\b`` word boundary):
+     access_token, refresh_token, id_token, client_secret, private_key,
+     api_key, apikey, sessionid, password, passwd, session, secret,
+     token, csrf, code, state, auth, pwd, key
+   (``authorization`` is handled exclusively by the Bearer rule — including
+   it here would strip the word "Bearer" after rule 1 already placed it.)
+   Longer keys are listed before shorter stems so that ``\\b`` anchoring is
+   belt-and-suspenders (e.g. ``access_token`` before ``token``).
+
+3. **Email addresses** — RFC-5322-ish ``user@host.tld``; scrubbed to
+   ``[REDACTED_EMAIL]``.
+
+4. **UUID-v4 / long-hex token-like values** (e.g. ``comment_token``) —
+   pattern ``xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx``; scrubbed to
+   ``[REDACTED_TOKEN]``.  The version nibble (4) and variant bits ([89ab])
+   prevent matching unrelated hex strings like git SHAs.
+
+Non-secret parameters (``redirect_uri``, ``page``, ``id``, ``utm_source``,
+etc.) are NOT redacted.
 
 We walk the event dict and scrub these patterns wherever they can surface:
 - exception values + messages
@@ -42,19 +66,64 @@ EMAIL_RE = re.compile(
     r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
 )
 
-# comment_token is a UUID v4 (see `project_client_comments.comment_token`).
-# The bracket notation anchors the version nibble (4) and the variant bits
-# ([89ab]) so we don't scrub unrelated hex strings like git SHAs.
+# UUID-v4 / token-like pattern.  Anchored on version nibble (4) and variant
+# bits ([89ab]) to avoid matching git SHAs and other hex strings.
+# Formerly described as comment_token only; retained name for backwards compat.
 COMMENT_TOKEN_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
     re.IGNORECASE,
 )
 
+# Bearer token pattern — matches `Bearer <token>` and replaces the token with
+# [REDACTED].  Must run BEFORE the key-name rule so the full
+# `Authorization: Bearer <x>` is handled before `authorization` can partially
+# match.
+BEARER_RE = re.compile(
+    r"\bBearer\s+([^\s\"',;}\]]+)",
+    re.IGNORECASE,
+)
+
+# Secret/credential parameter by key name.
+# Matches: key=value, "key":"value", "key": "value", key: value, etc.
+# The \b word-boundary on the key prevents substrings (e.g. `real_estate`→`state`).
+# Value stops at the first quote/whitespace/delimiter so innocent params
+# (page=2, redirect_uri=...) aren't touched unless they follow a secret key.
+#
+# Key list (longest-stem-first for belt-and-suspenders, \b does real work):
+#   access_token, refresh_token, id_token, client_secret, private_key,
+#   api_key, apikey, sessionid, password, passwd, session, secret, token,
+#   csrf, code, state, auth, pwd, key
+#
+# NOTE: `authorization` is intentionally absent — Bearer handles auth headers
+# end-to-end.  Including `authorization` here would strip the word "Bearer"
+# from the output after the Bearer rule already replaced the token value.
+#
+# ⚠️  Keep this list in sync with src/scrub.ts (same keys, same order).
+SECRET_KEY_RE = re.compile(
+    r"\b(access_token|refresh_token|id_token|client_secret|private_key|api_key|apikey|sessionid|password|passwd|session|secret|token|csrf|code|state|auth|pwd|key)\b"
+    r"(\s*[\"']?\s*[:=]\s*[\"']?)([^\"'&\s,;}\]]+)",
+    re.IGNORECASE,
+)
+
 
 def _scrub_string(value: str) -> str:
-    """Replace PII patterns in ``value`` with safe placeholders."""
-    value = EMAIL_RE.sub("[EMAIL]", value)
-    value = COMMENT_TOKEN_RE.sub("[COMMENT_TOKEN]", value)
+    """Replace PII and secret patterns in ``value`` with safe placeholders.
+
+    Application order:
+    1. Bearer tokens — first so full `Authorization: Bearer <x>` is handled
+       before the key-name rule can partially match `authorization`.
+    2. Secret/credential params by key name (value redacted, key kept).
+    3. Email addresses.
+    4. UUID-v4 / token-like patterns.
+    """
+    # 1. Bearer tokens
+    value = BEARER_RE.sub(r"Bearer [REDACTED]", value)
+    # 2. Secret/credential params by key name
+    value = SECRET_KEY_RE.sub(r"\1\2[REDACTED]", value)
+    # 3. Email addresses
+    value = EMAIL_RE.sub("[REDACTED_EMAIL]", value)
+    # 4. UUID-v4 / token-like patterns
+    value = COMMENT_TOKEN_RE.sub("[REDACTED_TOKEN]", value)
     return value
 
 
@@ -168,4 +237,12 @@ def scrub_pii(event: Any, hint: dict | None = None) -> Any:
     return event
 
 
-__all__ = ["scrub_pii", "_scrub_string", "_scrub_any", "EMAIL_RE", "COMMENT_TOKEN_RE"]
+__all__ = [
+    "scrub_pii",
+    "_scrub_string",
+    "_scrub_any",
+    "EMAIL_RE",
+    "COMMENT_TOKEN_RE",
+    "BEARER_RE",
+    "SECRET_KEY_RE",
+]
