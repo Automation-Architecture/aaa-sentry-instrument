@@ -74,6 +74,16 @@ COMMENT_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# IPv4 address pattern — matches exactly four octets (0-255) delimited by
+# word boundaries.  Requires all four octets so version strings like `1.2.3`
+# are NOT matched.  Applied in _scrub_string to catch IPs in messages, URLs,
+# and breadcrumb data.
+#
+# ⚠️  Keep the source string byte-identical to the JS twin (src/scrub.ts).
+IPV4_RE = re.compile(
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
+)
+
 # Bearer token pattern — matches `Bearer <token>` and replaces the token with
 # [REDACTED].  Must run BEFORE the key-name rule so the full
 # `Authorization: Bearer <x>` is handled before `authorization` can partially
@@ -115,6 +125,8 @@ def _scrub_string(value: str) -> str:
     2. Secret/credential params by key name (value redacted, key kept).
     3. Email addresses.
     4. UUID-v4 / token-like patterns.
+    5. IPv4 addresses in free-text (messages, URLs, breadcrumbs).
+       Requires all four octets — does NOT match version strings like 1.2.3.
     """
     # 1. Bearer tokens
     value = BEARER_RE.sub(r"Bearer [REDACTED]", value)
@@ -124,6 +136,8 @@ def _scrub_string(value: str) -> str:
     value = EMAIL_RE.sub("[REDACTED_EMAIL]", value)
     # 4. UUID-v4 / token-like patterns
     value = COMMENT_TOKEN_RE.sub("[REDACTED_TOKEN]", value)
+    # 5. IPv4 addresses
+    value = IPV4_RE.sub("[REDACTED_IP]", value)
     return value
 
 
@@ -234,6 +248,23 @@ def scrub_pii(event: Any, hint: dict | None = None) -> Any:
     if "tags" in event:
         event["tags"] = _scrub_any(event["tags"])
 
+    # User identity — scrub identity fields that carry PII.
+    # ``user.id`` is retained as a non-PII opaque identifier unless it looks
+    # like an email address, in which case it is also redacted.
+    user = event.get("user")
+    if isinstance(user, dict):
+        if "ip_address" in user:
+            user["ip_address"] = "[REDACTED_IP]"
+        if "email" in user:
+            user["email"] = "[REDACTED_EMAIL]"
+        if "username" in user:
+            user["username"] = "[REDACTED]"
+        if "name" in user:
+            user["name"] = "[REDACTED]"
+        # Redact user.id only when it looks like an email.
+        if isinstance(user.get("id"), str) and EMAIL_RE.search(user["id"]):
+            user["id"] = "[REDACTED_EMAIL]"
+
     return event
 
 
@@ -245,4 +276,5 @@ __all__ = [
     "COMMENT_TOKEN_RE",
     "BEARER_RE",
     "SECRET_KEY_RE",
+    "IPV4_RE",
 ]

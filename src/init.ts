@@ -57,6 +57,10 @@ export function initSentryClient(): void {
 
     tracesSampleRate: sampleRate(),
 
+    // Do not auto-attach PII (user identity, IP address, request bodies).
+    // scrubEvent in beforeSend provides an additional defence-in-depth layer.
+    sendDefaultPii: false,
+
     // Session replay OFF — privacy-conservative default.
     replaysSessionSampleRate: 0,
     replaysOnErrorSampleRate: 0,
@@ -88,6 +92,9 @@ export function initSentryServer(): void {
 
     tracesSampleRate: sampleRate(),
 
+    // Do not auto-attach PII (user identity, IP address, request bodies).
+    sendDefaultPii: false,
+
     environment: process.env.VERCEL_ENV || process.env.NODE_ENV,
     release: process.env.VERCEL_GIT_COMMIT_SHA,
 
@@ -109,6 +116,9 @@ export function initSentryEdge(): void {
     enabled: Boolean(serverDsn()),
 
     tracesSampleRate: sampleRate(),
+
+    // Do not auto-attach PII (user identity, IP address, request bodies).
+    sendDefaultPii: false,
 
     environment: process.env.VERCEL_ENV || process.env.NODE_ENV,
     release: process.env.VERCEL_GIT_COMMIT_SHA,
