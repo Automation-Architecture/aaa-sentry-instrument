@@ -25,6 +25,7 @@ from aaa_sentry_instrument.scrub import (
     COMMENT_TOKEN_RE,
     EMAIL_RE,
     BEARER_RE,
+    IPV4_RE,
     SECRET_KEY_RE,
     _scrub_string,
     _scrub_any,
@@ -56,6 +57,11 @@ def test_comment_token_re_is_exported() -> None:
 def test_bearer_re_and_secret_key_re_are_exported() -> None:
     assert BEARER_RE is not None
     assert SECRET_KEY_RE is not None
+
+
+def test_ipv4_re_pattern_is_pinned() -> None:
+    """IPV4_RE source must stay byte-identical to the JS twin (src/scrub.ts)."""
+    assert IPV4_RE.pattern == r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +98,28 @@ def test_scrub_string_redacts_multiple_occurrences() -> None:
     assert SAMPLE_TOKEN not in scrubbed
     assert "[REDACTED_EMAIL]" in scrubbed
     assert "[REDACTED_TOKEN]" in scrubbed
+
+
+# ---------------------------------------------------------------------------
+# _scrub_string — IPv4 address redaction
+# ---------------------------------------------------------------------------
+
+
+def test_scrub_string_redacts_ipv4_in_message() -> None:
+    result = _scrub_string("Request from 203.0.113.42 failed")
+    assert "203.0.113.42" not in result
+    assert "[REDACTED_IP]" in result
+
+
+def test_scrub_string_does_not_redact_version_string() -> None:
+    result = _scrub_string("Version 1.2.3 released")
+    assert result == "Version 1.2.3 released"
+
+
+def test_scrub_string_redacts_ipv4_in_url() -> None:
+    result = _scrub_string("https://203.0.113.42/api/data")
+    assert "203.0.113.42" not in result
+    assert "[REDACTED_IP]" in result
 
 
 # ---------------------------------------------------------------------------
@@ -365,3 +393,51 @@ def test_scrub_event_non_secret_query_params_survive() -> None:
     url = scrubbed["request"]["url"]
     assert "redirect_uri=https://app/cb" in url
     assert "page=2" in url
+
+
+# ---------------------------------------------------------------------------
+# scrub_pii — user identity field scrubbing
+# ---------------------------------------------------------------------------
+
+
+def test_scrub_event_redacts_user_ip_address() -> None:
+    event: dict = {"user": {"ip_address": "203.0.113.42"}}
+    scrubbed = scrub_pii(event, None)
+    assert scrubbed["user"]["ip_address"] == "[REDACTED_IP]"
+
+
+def test_scrub_event_redacts_user_email() -> None:
+    event: dict = {"user": {"email": SAMPLE_EMAIL}}
+    scrubbed = scrub_pii(event, None)
+    assert scrubbed["user"]["email"] == "[REDACTED_EMAIL]"
+
+
+def test_scrub_event_redacts_user_username() -> None:
+    event: dict = {"user": {"username": "jane.doe"}}
+    scrubbed = scrub_pii(event, None)
+    assert scrubbed["user"]["username"] == "[REDACTED]"
+
+
+def test_scrub_event_leaves_plain_user_id_intact() -> None:
+    event: dict = {"user": {"id": "user_abc123"}}
+    scrubbed = scrub_pii(event, None)
+    assert scrubbed["user"]["id"] == "user_abc123"
+
+
+def test_scrub_event_redacts_email_shaped_user_id() -> None:
+    event: dict = {"user": {"id": SAMPLE_EMAIL}}
+    scrubbed = scrub_pii(event, None)
+    assert scrubbed["user"]["id"] == "[REDACTED_EMAIL]"
+
+
+def test_scrub_event_redacts_ipv4_in_message() -> None:
+    event: dict = {"message": "Connection refused from 203.0.113.42"}
+    scrubbed = scrub_pii(event, None)
+    assert "203.0.113.42" not in scrubbed["message"]
+    assert "[REDACTED_IP]" in scrubbed["message"]
+
+
+def test_scrub_event_does_not_redact_version_string_in_message() -> None:
+    event: dict = {"message": "Upgraded to version 1.2.3"}
+    scrubbed = scrub_pii(event, None)
+    assert "1.2.3" in scrubbed["message"]

@@ -30,6 +30,7 @@ import {
   COMMENT_TOKEN_RE,
   BEARER_RE,
   SECRET_KEY_RE,
+  IPV4_RE,
 } from "../src/scrub.js";
 import type { ErrorEvent } from "@sentry/nextjs";
 
@@ -57,6 +58,12 @@ describe("exported regexes", () => {
   it("BEARER_RE and SECRET_KEY_RE are exported", () => {
     expect(BEARER_RE).toBeDefined();
     expect(SECRET_KEY_RE).toBeDefined();
+  });
+
+  it("IPV4_RE source is pinned (sync with scrub.py)", () => {
+    expect(IPV4_RE.source).toBe(
+      "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b"
+    );
   });
 });
 
@@ -154,6 +161,27 @@ describe("scrubString — secret params by key name", () => {
     const result = scrubString("https://api.example.com?api_key=sk-live-xyz");
     expect(result).not.toContain("sk-live-xyz");
     expect(result).toContain("[REDACTED]");
+  });
+});
+
+// ── scrubString — IPv4 address redaction ──────────────────────────────────
+
+describe("scrubString — IPv4 address", () => {
+  it("redacts a four-octet IPv4 address in a message", () => {
+    const result = scrubString("Request from 203.0.113.42 failed");
+    expect(result).not.toContain("203.0.113.42");
+    expect(result).toContain("[REDACTED_IP]");
+  });
+
+  it("does NOT redact a three-component version string like 1.2.3", () => {
+    const result = scrubString("Version 1.2.3 released");
+    expect(result).toBe("Version 1.2.3 released");
+  });
+
+  it("redacts an IP address appearing in a URL", () => {
+    const result = scrubString("https://203.0.113.42/api/data");
+    expect(result).not.toContain("203.0.113.42");
+    expect(result).toContain("[REDACTED_IP]");
   });
 });
 
@@ -368,5 +396,64 @@ describe("scrubEvent", () => {
     const scrubbed = scrubEvent(event);
     expect(scrubbed.request?.url).toContain("redirect_uri=https://app/cb");
     expect(scrubbed.request?.url).toContain("page=2");
+  });
+
+  it("redacts event.user.ip_address", () => {
+    const event: ErrorEvent = {
+      user: { ip_address: "203.0.113.42" },
+    };
+    const scrubbed = scrubEvent(event);
+    const user = scrubbed.user as Record<string, unknown>;
+    expect(user.ip_address).toBe("[REDACTED_IP]");
+  });
+
+  it("redacts event.user.email", () => {
+    const event: ErrorEvent = {
+      user: { email: SAMPLE_EMAIL },
+    };
+    const scrubbed = scrubEvent(event);
+    expect(scrubbed.user?.email).toBe("[REDACTED_EMAIL]");
+  });
+
+  it("redacts event.user.username", () => {
+    const event: ErrorEvent = {
+      user: { username: "jane.doe" },
+    };
+    const scrubbed = scrubEvent(event);
+    const user = scrubbed.user as Record<string, unknown>;
+    expect(user.username).toBe("[REDACTED]");
+  });
+
+  it("leaves a plain (non-email) event.user.id intact", () => {
+    const event: ErrorEvent = {
+      user: { id: "user_abc123" },
+    };
+    const scrubbed = scrubEvent(event);
+    expect(scrubbed.user?.id).toBe("user_abc123");
+  });
+
+  it("redacts event.user.id when it looks like an email", () => {
+    const event: ErrorEvent = {
+      user: { id: SAMPLE_EMAIL },
+    };
+    const scrubbed = scrubEvent(event);
+    expect(scrubbed.user?.id).toBe("[REDACTED_EMAIL]");
+  });
+
+  it("redacts an IPv4 address in event.message", () => {
+    const event: ErrorEvent = {
+      message: "Connection refused from 203.0.113.42",
+    };
+    const scrubbed = scrubEvent(event);
+    expect(scrubbed.message).not.toContain("203.0.113.42");
+    expect(scrubbed.message).toContain("[REDACTED_IP]");
+  });
+
+  it("does NOT redact a version string 1.2.3 in a message", () => {
+    const event: ErrorEvent = {
+      message: "Upgraded to version 1.2.3",
+    };
+    const scrubbed = scrubEvent(event);
+    expect(scrubbed.message).toContain("1.2.3");
   });
 });

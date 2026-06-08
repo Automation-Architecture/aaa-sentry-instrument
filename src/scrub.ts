@@ -64,6 +64,15 @@ export const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 export const COMMENT_TOKEN_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
 
+// IPv4 address pattern — matches exactly four octets (0-255) delimited by
+// word boundaries.  Requires all four octets so version strings like `1.2.3`
+// are NOT matched.  Applied in scrubString to catch IPs in messages, URLs,
+// and breadcrumb data.
+//
+// ⚠️  Keep the source string byte-identical to the Python twin (scrub.py).
+export const IPV4_RE =
+  /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+
 // Bearer token pattern — matches `Bearer <token>` (case-insensitive on
 // "Bearer") and replaces the token value with `[REDACTED]`.
 // Must run BEFORE the key-name rule so the full `Authorization: Bearer <x>`
@@ -100,7 +109,10 @@ export function scrubString(value: string): string {
     // 3. Email addresses.
     .replace(EMAIL_RE, "[REDACTED_EMAIL]")
     // 4. UUID-v4 / token-like patterns (comment_token etc.).
-    .replace(COMMENT_TOKEN_RE, "[REDACTED_TOKEN]");
+    .replace(COMMENT_TOKEN_RE, "[REDACTED_TOKEN]")
+    // 5. IPv4 addresses in free-text (messages, URLs, breadcrumbs).
+    //    Requires all four octets — does NOT match version strings like 1.2.3.
+    .replace(IPV4_RE, "[REDACTED_IP]");
 }
 
 /**
@@ -203,6 +215,32 @@ export function scrubEvent(event: ErrorEvent): ErrorEvent {
   // Tags — key/value pairs (values may be strings)
   if (event.tags !== undefined) {
     event.tags = scrubAny(event.tags) as typeof event.tags;
+  }
+
+  // User identity — scrub identity fields that carry PII.
+  // `user.id` is retained as a non-PII opaque identifier unless it looks like
+  // an email address (EMAIL_RE), in which case it is also redacted.
+  if (event.user !== undefined) {
+    const user = event.user as Record<string, unknown>;
+    if (typeof user.ip_address === "string") {
+      user.ip_address = "[REDACTED_IP]";
+    }
+    if (typeof user.email === "string") {
+      user.email = "[REDACTED_EMAIL]";
+    }
+    if (typeof user.username === "string") {
+      user.username = "[REDACTED]";
+    }
+    if (typeof user.name === "string") {
+      user.name = "[REDACTED]";
+    }
+    // Redact user.id only if it looks like an email.
+    if (typeof user.id === "string" && EMAIL_RE.test(user.id)) {
+      // Reset lastIndex after the global-flag test so subsequent calls are safe.
+      EMAIL_RE.lastIndex = 0;
+      user.id = "[REDACTED_EMAIL]";
+    }
+    EMAIL_RE.lastIndex = 0;
   }
 
   return event;
