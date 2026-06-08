@@ -35,6 +35,17 @@ import type { NextConfig } from "next";
  * @returns A Sentry-wrapped `NextConfig`.
  */
 export function withAaaSentry(nextConfig: NextConfig): NextConfig {
+  if (
+    process.env.SENTRY_AUTH_TOKEN &&
+    (!process.env.SENTRY_ORG || !process.env.SENTRY_PROJECT)
+  ) {
+    throw new Error(
+      "aaa-sentry-instrument: SENTRY_AUTH_TOKEN is set but SENTRY_ORG/SENTRY_PROJECT are missing" +
+        " — source maps would upload to the wrong/no project." +
+        " Set both, or unset SENTRY_AUTH_TOKEN."
+    );
+  }
+
   return withSentryConfig(nextConfig, {
     // Sentry org + project come from env vars so this wrapper is
     // project-agnostic and works across all AAA apps.

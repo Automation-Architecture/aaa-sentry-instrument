@@ -27,13 +27,13 @@ import { scrubEvent } from "./scrub.js";
 // ── shared DSN helpers ─────────────────────────────────────────────────────
 
 function clientDsn(): string | undefined {
-  return process.env.NEXT_PUBLIC_SENTRY_DSN || undefined;
+  return process.env.NEXT_PUBLIC_SENTRY_DSN?.trim() || undefined;
 }
 
 function serverDsn(): string | undefined {
   return (
-    process.env.SENTRY_DSN ||
-    process.env.NEXT_PUBLIC_SENTRY_DSN ||
+    process.env.SENTRY_DSN?.trim() ||
+    process.env.NEXT_PUBLIC_SENTRY_DSN?.trim() ||
     undefined
   );
 }
