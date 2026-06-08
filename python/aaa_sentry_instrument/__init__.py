@@ -12,7 +12,7 @@ Usage::
 """
 
 from .init import init_sentry
-from .scrub import scrub_pii, _scrub_string, _scrub_any, EMAIL_RE, COMMENT_TOKEN_RE
+from .scrub import scrub_pii, _scrub_string, _scrub_any, EMAIL_RE, COMMENT_TOKEN_RE, BEARER_RE, SECRET_KEY_RE
 
 __all__ = [
     "init_sentry",
@@ -21,4 +21,6 @@ __all__ = [
     "_scrub_any",
     "EMAIL_RE",
     "COMMENT_TOKEN_RE",
+    "BEARER_RE",
+    "SECRET_KEY_RE",
 ]

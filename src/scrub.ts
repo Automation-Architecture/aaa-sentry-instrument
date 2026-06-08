@@ -1,23 +1,44 @@
 /**
- * Shared Sentry PII scrubber for AAA web apps.
+ * Shared Sentry PII / secret scrubber for AAA web apps.
  *
- * Lifted verbatim from `Automation-Architecture/aaa-client-dashboard`
- * `app/src/lib/sentry-scrub.ts` — this file IS the canonical source for
- * the package. If you need to change scrubbing logic, change it here and
- * keep the Python twin (`python/aaa_sentry_instrument/scrub.py`) in sync.
+ * This file IS the canonical source for the package. If you need to change
+ * scrubbing logic, change it here and keep the Python twin
+ * (`python/aaa_sentry_instrument/scrub.py`) in sync.
  *
- * Two categories of sensitive data flow through AAA services:
+ * ⚠️  SYNC REQUIREMENT: The regex source strings and secret-key list in this
+ * file must stay byte-identical to the Python twin (`scrub.py`).  A comment
+ * in that file mirrors this requirement.  Whenever you add or remove a key,
+ * update BOTH files in the same commit.
  *
- * 1. **Email addresses** — submitted via contact forms / API payloads.
- *    Pattern: RFC-5322-ish `user@host.tld`; scrubbed to `[EMAIL]`.
+ * Four categories of sensitive data are scrubbed:
  *
- * 2. **comment_token** — UUID v4 stored in `project_client_comments` and
- *    passed as an edit/delete bearer credential on comment endpoints.
- *    Pattern: `xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`; scrubbed to
- *    `[COMMENT_TOKEN]`.
+ * 1. **Bearer tokens** — `Authorization: Bearer <token>` / bare `Bearer <x>`
+ *    anywhere in a string; scrubbed to `Bearer [REDACTED]`.
+ *    Applied FIRST so the full token (not just the word "Bearer") is removed
+ *    before the key-name rule can partially match `authorization`.
  *
- * Regexes are kept byte-identical to the Python twin (`scrub.py`) so both
- * runtimes redact the same patterns.
+ * 2. **Secret/credential parameters by key name** — wherever a
+ *    `key=value`, `"key":"value"`, or `key: value` pattern appears (query
+ *    strings, URLs, JSON-ish text, log lines).  Redacts the VALUE, keeps the
+ *    key.  Covered keys (case-insensitive, matched with `\b` word boundary):
+ *      access_token, refresh_token, id_token, client_secret, private_key,
+ *      api_key, apikey, sessionid, password, passwd, session, secret,
+ *      token, csrf, code, state, auth, pwd, key
+ *    (`authorization` is handled exclusively by the Bearer rule — including
+ *    it here would strip the word "Bearer" after rule 1 already placed it.)
+ *    Longer keys are listed before shorter stems so that `\b` anchoring is
+ *    belt-and-suspenders (e.g. `access_token` before `token`).
+ *
+ * 3. **Email addresses** — RFC-5322-ish `user@host.tld`; scrubbed to
+ *    `[REDACTED_EMAIL]`.
+ *
+ * 4. **UUID-v4 / long-hex token-like values** (e.g. `comment_token`) —
+ *    pattern `xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`; scrubbed to
+ *    `[REDACTED_TOKEN]`.  The version nibble (4) and variant bits ([89ab])
+ *    prevent matching unrelated hex strings like git SHAs.
+ *
+ * Non-secret parameters (`redirect_uri`, `page`, `id`, `utm_source`, etc.)
+ * are NOT redacted.
  *
  * Usage — import `scrubEvent` into each Sentry config file:
  *
@@ -37,17 +58,49 @@ import type { ErrorEvent } from "@sentry/nextjs";
 // Designed to be fast, not a complete RFC validator.
 export const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 
-// comment_token is a UUID v4 (see `project_client_comments.comment_token`).
-// The bracket notation anchors the version nibble (4) and the variant bits
-// ([89ab]) so we don't scrub unrelated hex strings like git SHAs.
+// UUID-v4 / token-like pattern.  Anchored on version nibble (4) and variant
+// bits ([89ab]) to avoid matching git SHAs and other hex strings.
+// Formerly named COMMENT_TOKEN_RE; kept for backwards-compat re-export.
 export const COMMENT_TOKEN_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
 
-/** Replace PII patterns in a string with safe placeholders. */
+// Bearer token pattern — matches `Bearer <token>` (case-insensitive on
+// "Bearer") and replaces the token value with `[REDACTED]`.
+// Must run BEFORE the key-name rule so the full `Authorization: Bearer <x>`
+// is handled before `authorization` could partially match.
+export const BEARER_RE = /\bBearer\s+([^\s"',;}\]]+)/gi;
+
+// Secret/credential parameter by key name.
+// Matches: key=value, "key":"value", "key": "value", key: value, etc.
+// The \b word-boundary on the key prevents substrings (`real_estate` → `state`).
+// Value stops at the first quote/whitespace/delimiter so innocent params
+// (page=2, redirect_uri=...) aren't touched unless they follow a secret key.
+//
+// Key list (longest-stem-first for belt-and-suspenders, \b does real work):
+//   access_token, refresh_token, id_token, client_secret, private_key,
+//   api_key, apikey, sessionid, password, passwd, session, secret, token,
+//   csrf, code, state, auth, pwd, key
+//
+// NOTE: `authorization` is intentionally absent — Bearer handles auth headers
+// end-to-end.  Including `authorization` here would strip the word "Bearer"
+// from the output after the Bearer rule already replaced the token value.
+//
+// ⚠️  Keep this list in sync with scrub.py (same keys, same order).
+export const SECRET_KEY_RE =
+  /\b(access_token|refresh_token|id_token|client_secret|private_key|api_key|apikey|sessionid|password|passwd|session|secret|token|csrf|code|state|auth|pwd|key)\b(\s*["']?\s*[:=]\s*["']?)([^"'&\s,;}\]]+)/gi;
+
+/** Replace PII and secret patterns in a string with safe placeholders. */
 export function scrubString(value: string): string {
   return value
-    .replace(EMAIL_RE, "[EMAIL]")
-    .replace(COMMENT_TOKEN_RE, "[COMMENT_TOKEN]");
+    // 1. Bearer tokens — run first so the full token is removed before the
+    //    key-name rule can partially match `authorization`.
+    .replace(BEARER_RE, "Bearer [REDACTED]")
+    // 2. Secret/credential params by key name (value redacted, key kept).
+    .replace(SECRET_KEY_RE, "$1$2[REDACTED]")
+    // 3. Email addresses.
+    .replace(EMAIL_RE, "[REDACTED_EMAIL]")
+    // 4. UUID-v4 / token-like patterns (comment_token etc.).
+    .replace(COMMENT_TOKEN_RE, "[REDACTED_TOKEN]");
 }
 
 /**

@@ -1,17 +1,24 @@
 /**
- * Tests for the JS Sentry PII scrubber (`src/scrub.ts`).
+ * Tests for the JS Sentry PII/secret scrubber (`src/scrub.ts`).
  *
  * Ported from `Automation-Architecture/aaa-client-dashboard`
  * `backend/tests/test_sentry_scrubber.py` and extended with JS-specific
- * cases (circular-ref safety, breadcrumb array shape).
+ * cases (circular-ref safety, breadcrumb array shape) and comprehensive
+ * secret-by-key-name + Bearer redaction tests.
  *
  * Covers:
- * - Email addresses (replaced with `[EMAIL]`)
- * - comment_token UUIDs (replaced with `[COMMENT_TOKEN]`)
+ * - Email addresses (replaced with `[REDACTED_EMAIL]`)
+ * - UUID-v4 / token-like values (replaced with `[REDACTED_TOKEN]`)
+ * - Bearer token header values (replaced with `Bearer [REDACTED]`)
+ * - Secret/credential params by key name (value replaced with `[REDACTED]`)
+ * - Non-secret params survive unredacted (`redirect_uri`, `page`, etc.)
  * - Deep nesting (extra, tags, nested objects)
  * - Circular reference safety (scrubAny with WeakSet guard via object identity)
  * - All well-known event fields: message, exception, request, breadcrumbs,
  *   extra, tags
+ *
+ * ⚠️  Keep in sync with python/tests/test_scrub.py — same key list, same
+ * placeholder strings, same behavioral assertions.
  */
 
 import { describe, it, expect } from "vitest";
@@ -21,12 +28,15 @@ import {
   scrubEvent,
   EMAIL_RE,
   COMMENT_TOKEN_RE,
+  BEARER_RE,
+  SECRET_KEY_RE,
 } from "../src/scrub.js";
 import type { ErrorEvent } from "@sentry/nextjs";
 
 // ── fixtures ───────────────────────────────────────────────────────────────
 
 const SAMPLE_EMAIL = "client@acme-corp.io";
+// A real UUID v4 (not relying on UUID shape for the key-name tests below).
 const SAMPLE_TOKEN = "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789";
 
 // ── exported patterns — pinned so a regex change is caught explicitly ──────
@@ -43,19 +53,30 @@ describe("exported regexes", () => {
       "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
     );
   });
+
+  it("BEARER_RE and SECRET_KEY_RE are exported", () => {
+    expect(BEARER_RE).toBeDefined();
+    expect(SECRET_KEY_RE).toBeDefined();
+  });
 });
 
-// ── scrubString ────────────────────────────────────────────────────────────
+// ── scrubString — email + tokenLike (legacy behaviours) ───────────────────
 
-describe("scrubString", () => {
+describe("scrubString — email and UUID-token", () => {
   it("redacts an email address", () => {
     expect(scrubString(`Contact from ${SAMPLE_EMAIL}`)).toBe(
-      "Contact from [EMAIL]"
+      "Contact from [REDACTED_EMAIL]"
     );
   });
 
-  it("redacts a comment_token UUID", () => {
-    expect(scrubString(`token=${SAMPLE_TOKEN}`)).toBe("token=[COMMENT_TOKEN]");
+  it("redacts a UUID-v4 token (key-name rule fires; value gets [REDACTED])", () => {
+    // When a UUID appears as the value of a secret key (`token=`), the
+    // key-name rule fires first and replaces the value with [REDACTED].
+    // The COMMENT_TOKEN_RE / [REDACTED_TOKEN] path handles bare UUIDs
+    // that are NOT preceded by a secret key name.
+    const result = scrubString(`token=${SAMPLE_TOKEN}`);
+    expect(result).not.toContain(SAMPLE_TOKEN);
+    expect(result).toContain("[REDACTED]");
   });
 
   it("leaves plain strings untouched", () => {
@@ -69,6 +90,8 @@ describe("scrubString", () => {
     expect(scrubString("abc123def456")).toBe("abc123def456");
     // UUID v1-style — version nibble differs (1, not 4)
     const nonV4 = "a1b2c3d4-e5f6-1789-c012-b3c4d5e6f789";
+    // It may match via key-name rule if a key precedes it, but the bare UUID
+    // without a preceding secret key should not be redacted.
     expect(scrubString(nonV4)).toBe(nonV4);
   });
 
@@ -77,8 +100,100 @@ describe("scrubString", () => {
     const scrubbed = scrubString(value);
     expect(scrubbed).not.toContain(SAMPLE_EMAIL);
     expect(scrubbed).not.toContain(SAMPLE_TOKEN);
-    expect(scrubbed).toContain("[EMAIL]");
-    expect(scrubbed).toContain("[COMMENT_TOKEN]");
+    expect(scrubbed).toContain("[REDACTED_EMAIL]");
+    expect(scrubbed).toContain("[REDACTED_TOKEN]");
+  });
+});
+
+// ── scrubString — secret params by key name (plain non-UUID values) ────────
+
+describe("scrubString — secret params by key name", () => {
+  it("redacts secret=hunter2", () => {
+    const result = scrubString("secret=hunter2");
+    expect(result).not.toContain("hunter2");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts access_token=abc123XYZ (plain non-UUID value)", () => {
+    const result = scrubString("access_token=abc123XYZ");
+    expect(result).not.toContain("abc123XYZ");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts client_secret=foo", () => {
+    const result = scrubString("client_secret=foo");
+    expect(result).not.toContain("foo");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts password=p@ss", () => {
+    const result = scrubString("password=p@ss");
+    expect(result).not.toContain("p@ss");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts code=authcode123", () => {
+    const result = scrubString("?code=authcode123&redirect_uri=https://app/cb");
+    expect(result).not.toContain("authcode123");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts state=xyz", () => {
+    const result = scrubString("state=xyz");
+    expect(result).not.toContain("xyz");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts token in JSON-ish text", () => {
+    const result = scrubString('{"token":"mySecretToken123"}');
+    expect(result).not.toContain("mySecretToken123");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts api_key in a query string", () => {
+    const result = scrubString("https://api.example.com?api_key=sk-live-xyz");
+    expect(result).not.toContain("sk-live-xyz");
+    expect(result).toContain("[REDACTED]");
+  });
+});
+
+// ── scrubString — Bearer token ─────────────────────────────────────────────
+
+describe("scrubString — Bearer token", () => {
+  it("redacts Authorization: Bearer sk-not-a-uuid-12345", () => {
+    const result = scrubString("Authorization: Bearer sk-not-a-uuid-12345");
+    expect(result).not.toContain("sk-not-a-uuid-12345");
+    expect(result).toContain("Bearer [REDACTED]");
+  });
+
+  it("redacts bare Bearer token in a URL header string", () => {
+    const result = scrubString("Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig");
+    expect(result).not.toContain("eyJhbGciOiJSUzI1NiJ9");
+    expect(result).toContain("Bearer [REDACTED]");
+  });
+});
+
+// ── scrubString — non-secret params survive ────────────────────────────────
+
+describe("scrubString — non-secret params survive unredacted", () => {
+  it("redirect_uri=https://app/cb survives", () => {
+    const result = scrubString("redirect_uri=https://app/cb");
+    expect(result).toBe("redirect_uri=https://app/cb");
+  });
+
+  it("page=2 survives", () => {
+    const result = scrubString("page=2");
+    expect(result).toBe("page=2");
+  });
+
+  it("utm_source=newsletter survives", () => {
+    const result = scrubString("utm_source=newsletter");
+    expect(result).toBe("utm_source=newsletter");
+  });
+
+  it("id=42 survives", () => {
+    const result = scrubString("id=42");
+    expect(result).toBe("id=42");
   });
 });
 
@@ -86,7 +201,7 @@ describe("scrubString", () => {
 
 describe("scrubAny", () => {
   it("scrubs string values", () => {
-    expect(scrubAny(SAMPLE_EMAIL)).toBe("[EMAIL]");
+    expect(scrubAny(SAMPLE_EMAIL)).toBe("[REDACTED_EMAIL]");
   });
 
   it("leaves non-string primitives unchanged", () => {
@@ -97,7 +212,7 @@ describe("scrubAny", () => {
 
   it("scrubs strings inside arrays", () => {
     const result = scrubAny([SAMPLE_EMAIL, "safe"]) as string[];
-    expect(result[0]).toBe("[EMAIL]");
+    expect(result[0]).toBe("[REDACTED_EMAIL]");
     expect(result[1]).toBe("safe");
   });
 
@@ -107,8 +222,8 @@ describe("scrubAny", () => {
         level2: { email: SAMPLE_EMAIL, token: SAMPLE_TOKEN, safe: "keep" },
       },
     }) as Record<string, Record<string, Record<string, string>>>;
-    expect(result.level1.level2.email).toBe("[EMAIL]");
-    expect(result.level1.level2.token).toBe("[COMMENT_TOKEN]");
+    expect(result.level1.level2.email).toBe("[REDACTED_EMAIL]");
+    expect(result.level1.level2.token).not.toContain(SAMPLE_TOKEN);
     expect(result.level1.level2.safe).toBe("keep");
   });
 
@@ -119,7 +234,7 @@ describe("scrubAny", () => {
     expect(() => scrubAny(obj)).not.toThrow();
     // The email in the top-level string field should still be scrubbed.
     const result = scrubAny({ email: SAMPLE_EMAIL }) as Record<string, string>;
-    expect(result.email).toBe("[EMAIL]");
+    expect(result.email).toBe("[REDACTED_EMAIL]");
   });
 
   it("handles circular references inside arrays", () => {
@@ -173,8 +288,8 @@ describe("scrubEvent", () => {
     const rendered = JSON.stringify(scrubbed);
     expect(rendered).not.toContain(SAMPLE_EMAIL);
     expect(rendered).not.toContain(SAMPLE_TOKEN);
-    expect(rendered).toContain("[EMAIL]");
-    expect(rendered).toContain("[COMMENT_TOKEN]");
+    expect(rendered).toContain("[REDACTED_EMAIL]");
+    expect(rendered).toContain("[REDACTED");
 
     // Static fields must survive
     expect(
@@ -212,8 +327,8 @@ describe("scrubEvent", () => {
     const scrubbed = scrubEvent(event);
     expect(scrubbed.message).not.toContain(SAMPLE_EMAIL);
     expect(scrubbed.message).not.toContain(SAMPLE_TOKEN);
-    expect(scrubbed.message).toContain("[EMAIL]");
-    expect(scrubbed.message).toContain("[COMMENT_TOKEN]");
+    expect(scrubbed.message).toContain("[REDACTED_EMAIL]");
+    expect(scrubbed.message).toContain("[REDACTED");
   });
 
   it("scrubs oauth/secret params deep in extra", () => {
@@ -228,7 +343,30 @@ describe("scrubEvent", () => {
     const scrubbed = scrubEvent(event);
     const nested = (scrubbed.extra as Record<string, Record<string, string>>)
       .nested;
-    expect(nested.contact_email).toBe("[EMAIL]");
-    expect(nested.auth_token).toBe("[COMMENT_TOKEN]");
+    expect(nested.contact_email).toBe("[REDACTED_EMAIL]");
+    expect(nested.auth_token).not.toContain(SAMPLE_TOKEN);
+  });
+
+  it("redacts Bearer token in request headers captured in extra", () => {
+    const event: ErrorEvent = {
+      extra: {
+        headers: "Authorization: Bearer sk-not-a-uuid-12345",
+      },
+    };
+    const scrubbed = scrubEvent(event);
+    const rendered = JSON.stringify(scrubbed);
+    expect(rendered).not.toContain("sk-not-a-uuid-12345");
+    expect(rendered).toContain("Bearer [REDACTED]");
+  });
+
+  it("non-secret query param redirect_uri survives in event URL", () => {
+    const event: ErrorEvent = {
+      request: {
+        url: "https://api.dashboard.ai/oauth/callback?redirect_uri=https://app/cb&page=2",
+      },
+    };
+    const scrubbed = scrubEvent(event);
+    expect(scrubbed.request?.url).toContain("redirect_uri=https://app/cb");
+    expect(scrubbed.request?.url).toContain("page=2");
   });
 });

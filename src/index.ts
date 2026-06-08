@@ -12,7 +12,7 @@
  */
 
 // Scrubber — the heart of the package.  JS and Python twins must stay in sync.
-export { scrubEvent, scrubString, scrubAny, EMAIL_RE, COMMENT_TOKEN_RE } from "./scrub.js";
+export { scrubEvent, scrubString, scrubAny, EMAIL_RE, COMMENT_TOKEN_RE, BEARER_RE, SECRET_KEY_RE } from "./scrub.js";
 
 // Sentry init helpers.
 export {
