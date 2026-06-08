@@ -18,11 +18,30 @@ use byte-identical regex patterns.
 ### Install
 
 ```sh
-npm install github:Automation-Architecture/aaa-sentry-instrument
+npm install "git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git#v0.1.0"
 ```
 
 The package builds during install via `prepare: tsc`. Peer dependency:
 `@sentry/nextjs >= 8`.
+
+> **Why `git+https` instead of the `github:` shorthand?**
+> The `github:` shorthand resolves to a `git+ssh://` URL in the lockfile.
+> SSH authentication fails in keyless CI environments (Vercel, GitHub Actions, Railway).
+> The explicit `git+https` form with a pinned tag is reproducible and works in every
+> build environment without any SSH key configuration.
+
+> **Repo is public — no auth token needed in CI.**
+
+> **pnpm apps:** the package must be listed under `allowBuilds` in `pnpm-workspace.yaml`;
+> otherwise pnpm skips the `prepare`/`tsc` build step and imports fail with no obvious error:
+> ```yaml
+> # pnpm-workspace.yaml
+> allowBuilds:
+>   - aaa-sentry-instrument
+> ```
+
+> **Versioning:** pin to a tag (e.g. `#v0.1.0`). To upgrade, publish a new tag and
+> bump the `#<tag>` reference in `package.json`.
 
 ### Scaffold (recommended)
 
@@ -121,8 +140,13 @@ export { withAaaSentry }
 ### Install
 
 ```sh
-pip install "git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git#subdirectory=python"
+pip install "aaa-sentry-instrument @ git+https://github.com/Automation-Architecture/aaa-sentry-instrument.git@v0.1.0#subdirectory=python"
 ```
+
+> **Repo is public — no auth token needed in CI.**
+>
+> **Versioning:** pin to a tag (e.g. `@v0.1.0`). To upgrade, publish a new tag and
+> bump the `@<tag>` reference in your `requirements.txt` / `pyproject.toml`.
 
 ### Usage
 
