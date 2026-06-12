@@ -22,9 +22,11 @@ update both test files (`__tests__/scrub.test.ts` and
 
 ## Workflow
 
-Standard AAA PR flow applies: topic branch → PR → CodeRabbit + Copilot review
-→ `aaa-merge <PR#>`. All three `.github/workflows/` files are copied from the
-org `.github` repo; do not edit them here — pull updates from upstream.
+Standard AAA PR flow applies: topic branch → PR → deliberate review via the
+`/code-review` skill and/or human review → `aaa-merge <PR#>`. (CodeRabbit and
+the Copilot PR reviewer were removed org-wide 2026-06-11; nothing auto-reviews
+or gates merges.) The `.github/workflows/` files are copied from the org
+`.github` repo; do not edit them here — pull updates from upstream.
 
 ## Local verification
 
