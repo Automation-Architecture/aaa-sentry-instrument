@@ -25,10 +25,8 @@ update both test files (`__tests__/scrub.test.ts` and
 
 ## Workflow
 
-Standard AAA PR flow applies: topic branch → PR → deliberate review via the
-`/code-review` skill and/or human review → `aaa-merge <PR#>`. (CodeRabbit and
-the Copilot PR reviewer were removed org-wide 2026-06-11; nothing auto-reviews
-or gates merges.) The `.github/workflows/` files are copied from the org
+Standard AAA PR flow applies: topic branch → PR → the merge gate's review → `aaa-merge <PR#>`,
+per the [aaa-SOP merge policy](https://github.com/Automation-Architecture/aaa-SOP/blob/main/pr-review-and-merge-sop.md). The `.github/workflows/` files are copied from the org
 `.github` repo; do not edit them here — pull updates from upstream.
 
 ## Local verification
